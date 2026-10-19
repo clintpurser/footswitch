@@ -1,0 +1,13 @@
+{
+  "module_name": "footswitch",
+  "visibility": "public",
+  "namespace": "clint",
+  "language": "go",
+  "resource_type": "component",
+  "resource_subtype": "input",
+  "model_name": "pcsensor-3-pedal",
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2026-10-19T14:54:55.985962Z",
+  "module_readme_link": "README.md"
+}
