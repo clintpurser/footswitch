@@ -8,16 +8,19 @@
     {
       "api": "rdk:component:input_controller",
       "model": "clint:footswitch:pcsensor-3-pedal",
+      "short_description": "iKKEGOL / PCsensor 3-pedal USB footswitch as buttons; reads and programs each pedal's key",
       "markdown_link": "clint_footswitch_pcsensor-3-pedal.md"
     },
     {
       "api": "rdk:service:generic",
       "model": "clint:footswitch:actions",
+      "short_description": "Runs do_command on other resources when an input controller's buttons are pressed or released",
       "markdown_link": "clint_footswitch_actions.md"
     },
     {
       "api": "rdk:service:discovery",
       "model": "clint:footswitch:discovery",
+      "short_description": "Finds attached iKKEGOL / PCsensor USB foot pedals and suggests a pcsensor-3-pedal config",
       "markdown_link": "clint_footswitch_discovery.md"
     }
   ],

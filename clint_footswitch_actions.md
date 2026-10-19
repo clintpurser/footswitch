@@ -2,6 +2,10 @@
 
 A generic service that listens to any input controller (the pedals, or a gamepad) and calls `do_command` on another resource when a control is pressed or released.
 
+## Supported hardware
+
+No hardware of its own. It listens to any input controller on the machine, including the [`pcsensor-3-pedal`](clint_footswitch_pcsensor-3-pedal.md) pedals, gamepads and web gamepads, and calls any resource that implements `do_command`.
+
 ## Configuration
 
 ```json

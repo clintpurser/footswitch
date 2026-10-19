@@ -2,6 +2,22 @@
 
 An input controller for PCsensor-family 3-pedal USB foot pedals. It finds the pedal, grabs it so its keys never type into other programs, reads (or programs) which key each pedal sends, and reports each pedal as a button.
 
+## Supported hardware
+
+PCsensor-protocol 3-pedal USB foot pedals, sold as iKKEGOL, PCsensor and unbranded. They show up as "PCsensor FootSwitch" in `lsusb`.
+
+| USB ID | Status |
+| --- | --- |
+| `3553:b001` | Tested: iKKEGOL 3-pedal, x86_64 Pop!_OS 24.04 |
+| `1a86:e026` | Same protocol per [rgerganov/footswitch](https://github.com/rgerganov/footswitch); untested |
+| `0c45:7403` | Same protocol; untested |
+| `0c45:7404` | Same protocol; untested |
+| `413d:2107` | Same protocol; untested |
+
+Not supported yet: 1- and 2-pedal units (including `5131:2019`), and non-PCsensor pedals.
+
+Runs on Linux only (`linux/amd64`, `linux/arm64`), such as a Raspberry Pi, Jetson or x86 PC. `viam-server` needs access to `/dev/input/event*` and `/dev/hidraw*`, which it has when running as root (the default).
+
 ## Configuration
 
 Every attribute is optional. With `{}`, the component finds the pedal, reads which key each pedal sends and reports them as `ButtonLT`, `ButtonSelect` and `ButtonRT`.
