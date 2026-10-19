@@ -1,0 +1,37 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "clint:footswitch",
+  "visibility": "public",
+  "url": "https://github.com/clintpurser/footswitch",
+  "description": "PCsensor-family USB foot pedals (iKKEGOL, PCsensor, unbranded) as input controllers, plus an actions service that runs DoCommands on pedal presses and a discovery service.",
+  "models": [
+    {
+      "api": "rdk:component:input_controller",
+      "model": "clint:footswitch:pcsensor-3-pedal",
+      "markdown_link": "clint_footswitch_pcsensor-3-pedal.md"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "clint:footswitch:actions",
+      "markdown_link": "clint_footswitch_actions.md"
+    },
+    {
+      "api": "rdk:service:discovery",
+      "model": "clint:footswitch:discovery",
+      "markdown_link": "clint_footswitch_discovery.md"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "bin/footswitch",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }
+}
