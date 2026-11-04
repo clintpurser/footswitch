@@ -1,16 +1,17 @@
 # footswitch
 
-Use PCsensor-family 3-pedal USB foot pedals (sold as iKKEGOL, PCsensor and unbranded) as Viam input controllers, and run DoCommands on other resources when a pedal is pressed or released.
+Use PCsensor-family 1- and 3-pedal USB foot pedals (sold as iKKEGOL, PCsensor and unbranded) as Viam input controllers, and run DoCommands on other resources when a pedal is pressed or released.
 
-Keywords: iKKEGOL, PCsensor, USB foot pedal, footswitch.
+Keywords: iKKEGOL, PCsensor, USB foot pedal, footswitch, single pedal, 3 pedal.
 
 > **Safety:** a USB keyboard pedal can drop events, and the module can crash. This module is a convenience control and does not replace a hardware e-stop.
 
 ## Models
 
 - [`clint:footswitch:pcsensor-3-pedal`](clint_footswitch_pcsensor-3-pedal.md): input controller for a 3-pedal unit.
+- [`clint:footswitch:pcsensor-1-pedal`](clint_footswitch_pcsensor-1-pedal.md): input controller for a single-pedal unit.
 - [`clint:footswitch:actions`](clint_footswitch_actions.md): generic service that runs DoCommands when any input controller's buttons are pressed or released.
-- [`clint:footswitch:discovery`](clint_footswitch_discovery.md): discovery service that suggests a config for each attached pedal.
+- [`clint:footswitch:discovery`](clint_footswitch_discovery.md): discovery service that suggests configs for each attached pedal.
 
 Supported USB IDs: `1a86:e026`, `3553:b001`, `0c45:7403`, `0c45:7404`, `413d:2107`.
 
@@ -19,13 +20,15 @@ Platforms: Linux only (`linux/amd64`, `linux/arm64`). The module reads the pedal
 ## Quick start
 
 1. Plug in the pedal.
-2. Add the `clint:footswitch:discovery` service, open its **Test** panel and add the suggested `pcsensor-3-pedal` component. Or add the component by hand with empty attributes `{}`.
+2. Add the `clint:footswitch:discovery` service, open its **Test** panel and add the suggestion that matches your pedal count: `footswitch-…` for a 3-pedal unit, `footswitch-1-pedal-…` for a single-pedal unit. The module cannot tell them apart, so this is your call. Or add the component by hand with empty attributes `{}`, using `pcsensor-3-pedal` or `pcsensor-1-pedal`.
 3. Press the pedals and watch the machine's **Logs** tab:
 
    ```text
    pedal left pressed (slot 1, KEY_F13)
    pedal left released after 1.42s (slot 1, KEY_F13)
    ```
+
+   A single-pedal unit logs `pedal pressed (slot 2, KEY_B)`.
 
 4. Add a `clint:footswitch:actions` service to make the pedals do something.
 
@@ -34,7 +37,8 @@ Platforms: Linux only (`linux/amd64`, `linux/arm64`). The module reads the pedal
 ```sh
 make test            # unit tests, run on any OS
 make module.tar.gz   # build for the current OS/arch (set VIAM_BUILD_OS/VIAM_BUILD_ARCH to cross-compile)
-go run ./cmd/cli     # on Linux: open the pedal and log presses without viam-server
+go run ./cmd/cli     # on Linux: open a 3-pedal unit and log presses without viam-server
+go run ./cmd/cli -pedals 1   # same, for a single-pedal unit
 ```
 
 Settings protocol reference: [rgerganov/footswitch](https://github.com/rgerganov/footswitch).

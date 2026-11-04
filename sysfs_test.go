@@ -74,7 +74,13 @@ func TestScanFindsKeyboardInterface(t *testing.T) {
 	}
 
 	cfgs := suggestConfigs(devs)
+	if len(cfgs) != 2 {
+		t.Fatalf("suggested %d configs: %+v", len(cfgs), cfgs)
+	}
 	if cfgs[0].Name != "footswitch-3553-b001-6" || cfgs[0].Attributes["device_path"] != d.byPath || cfgs[0].Model != Pcsensor3Pedal {
 		t.Fatalf("suggested %+v", cfgs[0])
+	}
+	if cfgs[1].Name != "footswitch-1-pedal-3553-b001-6" || cfgs[1].Attributes["device_path"] != d.byPath || cfgs[1].Model != Pcsensor1Pedal {
+		t.Fatalf("suggested %+v", cfgs[1])
 	}
 }

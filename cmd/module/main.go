@@ -13,6 +13,7 @@ import (
 func main() {
 	module.ModularMain(
 		resource.APIModel{API: input.API, Model: footswitch.Pcsensor3Pedal},
+		resource.APIModel{API: input.API, Model: footswitch.Pcsensor1Pedal},
 		resource.APIModel{API: generic.API, Model: footswitch.Actions},
 		resource.APIModel{API: discovery.API, Model: footswitch.Discovery},
 	)

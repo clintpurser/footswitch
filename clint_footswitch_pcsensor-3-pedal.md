@@ -14,7 +14,9 @@ PCsensor-protocol 3-pedal USB foot pedals, sold as iKKEGOL, PCsensor and unbrand
 | `0c45:7404` | Same protocol; untested |
 | `413d:2107` | Same protocol; untested |
 
-Not supported yet: 1- and 2-pedal units (including `5131:2019`), and non-PCsensor pedals.
+Single-pedal units: use [`pcsensor-1-pedal`](clint_footswitch_pcsensor-1-pedal.md). A single-pedal unit looks identical to a 3-pedal one over USB, so it starts under this model without error but reports two pedals that never fire.
+
+Not supported: 2-pedal units, the `5131:2019` single-pedal unit, and non-PCsensor pedals.
 
 Runs on Linux only (`linux/amd64`, `linux/arm64`), such as a Raspberry Pi, Jetson or x86 PC. `viam-server` needs access to `/dev/input/event*` and `/dev/hidraw*`, which it has when running as root (the default).
 

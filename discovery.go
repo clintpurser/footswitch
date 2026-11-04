@@ -36,8 +36,9 @@ func newDiscovery(ctx context.Context, deps resource.Dependencies, conf resource
 	return &footswitchDiscovery{Named: conf.ResourceName().AsNamed(), logger: logger, paths: hostPaths}, nil
 }
 
-// DiscoverResources suggests a pcsensor-3-pedal component for each attached
-// pedal, including pedals already in use.
+// DiscoverResources suggests a pcsensor-3-pedal and a pcsensor-1-pedal
+// component for each attached pedal, including pedals already in use. Both
+// are suggested because the device cannot report how many pedals it has.
 func (d *footswitchDiscovery) DiscoverResources(ctx context.Context, extra map[string]any) ([]resource.Config, error) {
 	devs, err := findPedals(d.paths)
 	if err != nil {
@@ -46,16 +47,28 @@ func (d *footswitchDiscovery) DiscoverResources(ctx context.Context, extra map[s
 	return suggestConfigs(devs), nil
 }
 
+// suggestConfigs emits two configs per device, 3-pedal first: the device
+// cannot tell the module its pedal count, so the user picks the one that
+// matches their hardware. Adding both for one device makes the second fail
+// to grab the pedal.
 func suggestConfigs(devs []inputDevice) []resource.Config {
-	out := make([]resource.Config, 0, len(devs))
+	out := make([]resource.Config, 0, 2*len(devs))
 	for _, dev := range devs {
-		name := fmt.Sprintf("footswitch-%s-%s", strings.ReplaceAll(dev.usbID, ":", "-"), dev.port)
-		out = append(out, resource.Config{
-			Name:       name,
-			API:        input.API,
-			Model:      Pcsensor3Pedal,
-			Attributes: utils.AttributeMap{"device_path": dev.stablePath()},
-		})
+		id := strings.ReplaceAll(dev.usbID, ":", "-")
+		for _, m := range []struct {
+			prefix string
+			model  resource.Model
+		}{
+			{"footswitch", Pcsensor3Pedal},
+			{"footswitch-1-pedal", Pcsensor1Pedal},
+		} {
+			out = append(out, resource.Config{
+				Name:       fmt.Sprintf("%s-%s-%s", m.prefix, id, dev.port),
+				API:        input.API,
+				Model:      m.model,
+				Attributes: utils.AttributeMap{"device_path": dev.stablePath()},
+			})
+		}
 	}
 	return out
 }

@@ -3,13 +3,19 @@
   "module_id": "clint:footswitch",
   "visibility": "public",
   "url": "https://github.com/clintpurser/footswitch",
-  "description": "PCsensor-family USB foot pedals (iKKEGOL, PCsensor, unbranded) as input controllers, plus an actions service that runs DoCommands on pedal presses and a discovery service.",
+  "description": "PCsensor-family 1- and 3-pedal USB foot pedals (iKKEGOL, PCsensor, unbranded) as input controllers, plus an actions service that runs DoCommands on pedal presses and a discovery service.",
   "models": [
     {
       "api": "rdk:component:input_controller",
       "model": "clint:footswitch:pcsensor-3-pedal",
       "short_description": "iKKEGOL / PCsensor 3-pedal USB footswitch as buttons; reads and programs each pedal's key",
       "markdown_link": "clint_footswitch_pcsensor-3-pedal.md"
+    },
+    {
+      "api": "rdk:component:input_controller",
+      "model": "clint:footswitch:pcsensor-1-pedal",
+      "short_description": "iKKEGOL / PCsensor single-pedal USB footswitch as a button; reads and programs its key",
+      "markdown_link": "clint_footswitch_pcsensor-1-pedal.md"
     },
     {
       "api": "rdk:service:generic",
@@ -20,7 +26,7 @@
     {
       "api": "rdk:service:discovery",
       "model": "clint:footswitch:discovery",
-      "short_description": "Finds attached iKKEGOL / PCsensor USB foot pedals and suggests a pcsensor-3-pedal config",
+      "short_description": "Finds attached iKKEGOL / PCsensor USB foot pedals and suggests pcsensor-3-pedal and pcsensor-1-pedal configs",
       "markdown_link": "clint_footswitch_discovery.md"
     }
   ],

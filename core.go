@@ -14,6 +14,7 @@ import (
 // pedalSpec is one pedal's resolved config.
 type pedalSpec struct {
 	name    string
+	label   string // used in log lines and setup errors, e.g. "pedal left" or "pedal"
 	slot    int
 	control input.Control
 	keycode *keyDef // set if the config programs this pedal's key
@@ -162,23 +163,23 @@ func (c *controllerCore) setup(dev *openedDevice) ([]pedalSetup, error) {
 			continue
 		}
 		if !canRead {
-			return nil, fmt.Errorf("can't read which key pedal %s (slot %d) sends; set its keycode", p.name, p.slot)
+			return nil, fmt.Errorf("can't read which key %s (slot %d) sends; set its keycode", p.label, p.slot)
 		}
 		switch cur.mode() {
 		case "key":
 		case "mouse", "macro":
-			return nil, fmt.Errorf("pedal %s (slot %d) is in %s mode; set a keycode for it so the module can program a key",
-				p.name, p.slot, cur.mode())
+			return nil, fmt.Errorf("%s (slot %d) is in %s mode; set a keycode for it so the module can program a key",
+				p.label, p.slot, cur.mode())
 		default:
-			return nil, fmt.Errorf("pedal %s (slot %d) has no key stored (%s); set a keycode for it", p.name, p.slot, cur.mode())
+			return nil, fmt.Errorf("%s (slot %d) has no key stored (%s); set a keycode for it", p.label, p.slot, cur.mode())
 		}
 		k, ok := keysByHID[cur.hidKey()]
 		if !ok {
-			return nil, fmt.Errorf("pedal %s (slot %d) sends HID key 0x%02x, which this module doesn't know; set a keycode for it",
-				p.name, p.slot, cur.hidKey())
+			return nil, fmt.Errorf("%s (slot %d) sends HID key 0x%02x, which this module doesn't know; set a keycode for it",
+				p.label, p.slot, cur.hidKey())
 		}
 		if cur.modifiers() != 0 {
-			c.logger.Warnf("pedal %s (slot %d) also sends modifier keys (0x%02x); only %s is used", p.name, p.slot, cur.modifiers(), k.name)
+			c.logger.Warnf("%s (slot %d) also sends modifier keys (0x%02x); only %s is used", p.label, p.slot, cur.modifiers(), k.name)
 		}
 		setups[i] = pedalSetup{key: k, source: "device", mode: "key"}
 	}
@@ -200,14 +201,14 @@ func (c *controllerCore) setup(dev *openedDevice) ([]pedalSetup, error) {
 		}
 		for _, p := range c.pedals {
 			if p.keycode != nil && !stored[p.slot-1].isPlainKey(p.keycode.hid) {
-				c.logger.Infof("programmed pedal %s (slot %d) to send %s", p.name, p.slot, p.keycode.name)
+				c.logger.Infof("programmed %s (slot %d) to send %s", p.label, p.slot, p.keycode.name)
 			}
 		}
 		if after, err := dev.settings.readSlots(); err == nil {
 			for _, p := range c.pedals {
 				if p.keycode != nil && !after[p.slot-1].isPlainKey(p.keycode.hid) {
-					c.logger.Warnf("pedal %s (slot %d) reads back as %s 0x%02x after programming %s",
-						p.name, p.slot, after[p.slot-1].mode(), after[p.slot-1].hidKey(), p.keycode.name)
+					c.logger.Warnf("%s (slot %d) reads back as %s 0x%02x after programming %s",
+						p.label, p.slot, after[p.slot-1].mode(), after[p.slot-1].hidKey(), p.keycode.name)
 				}
 			}
 		}
@@ -322,7 +323,7 @@ func (c *controllerCore) handleEvent(ev rawEvent) {
 		return
 	}
 	if wait := c.opts.debounce - now.Sub(p.changedAt); wait > 0 {
-		c.logger.Debugf("pedal %s %s ignored by debounce (%s)", p.name, map[bool]string{true: "press", false: "release"}[p.raw], p.describe())
+		c.logger.Debugf("%s %s ignored by debounce (%s)", p.label, map[bool]string{true: "press", false: "release"}[p.raw], p.describe())
 		// If the pedal settles in the other state, report it once the
 		// debounce window ends, so a pedal is never left stuck down.
 		if p.settle == nil {
@@ -361,10 +362,10 @@ func (c *controllerCore) change(p *pedal, now time.Time, note string) []firing {
 	}
 	if p.pressed {
 		p.pressedAt = now
-		c.logger.Infof("pedal %s pressed (%s)%s", p.name, p.describe(), suffix)
+		c.logger.Infof("%s pressed (%s)%s", p.label, p.describe(), suffix)
 		return c.record(input.Event{Time: now, Event: input.ButtonPress, Control: p.control, Value: 1})
 	}
-	c.logger.Infof("pedal %s released after %.2fs (%s)%s", p.name, now.Sub(p.pressedAt).Seconds(), p.describe(), suffix)
+	c.logger.Infof("%s released after %.2fs (%s)%s", p.label, now.Sub(p.pressedAt).Seconds(), p.describe(), suffix)
 	return c.record(input.Event{Time: now, Event: input.ButtonRelease, Control: p.control, Value: 0})
 }
 

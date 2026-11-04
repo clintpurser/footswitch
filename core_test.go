@@ -111,10 +111,27 @@ func (h *harness) current() *fakeEvents {
 }
 
 func newHarness(t *testing.T, cfg *Config, slots [3]slotSetting, debounce time.Duration) (*harness, error) {
+	return newHarnessSpecs(t, "pcsensor-3-pedal", defaultSpecs(t, cfg), slots, debounce)
+}
+
+func onePedalSpecs(t *testing.T, cfg *OnePedalConfig) []pedalSpec {
+	t.Helper()
+	specs, err := cfg.pedalSpecs("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return specs
+}
+
+func newOnePedalHarness(t *testing.T, cfg *OnePedalConfig, slots [3]slotSetting, debounce time.Duration) (*harness, error) {
+	return newHarnessSpecs(t, "pcsensor-1-pedal", onePedalSpecs(t, cfg), slots, debounce)
+}
+
+func newHarnessSpecs(t *testing.T, model string, specs []pedalSpec, slots [3]slotSetting, debounce time.Duration) (*harness, error) {
 	h := &harness{t: t, slots: &fakeSlots{slots: slots}, avail: true, events: make(chan input.Event, 64)}
 	core, err := newControllerCore(coreOptions{
-		model:        "pcsensor-3-pedal",
-		pedals:       defaultSpecs(t, cfg),
+		model:        model,
+		pedals:       specs,
 		debounce:     debounce,
 		open:         h.open,
 		pollInterval: 10 * time.Millisecond,
@@ -284,4 +301,120 @@ func TestUnplugReplugAndClose(t *testing.T) {
 
 	h.core.close()
 	h.expect(input.ButtonRelease, input.ButtonRT)
+}
+
+// factorySlots is what a PCsensor unit ships with: a, b, c in slots 1-3.
+// A single-pedal unit has the same three stored, with only slot 2 wired up.
+var factorySlots = [3]slotSetting{keySetting(0x04), keySetting(0x05), keySetting(0x06)}
+
+const (
+	keyA = 30
+	keyB = 48
+	keyC = 46
+)
+
+func TestOnePedalReadsSlot2(t *testing.T) {
+	h, err := newOnePedalHarness(t, &OnePedalConfig{}, factorySlots, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controls := h.core.controls(); len(controls) != 1 || controls[0] != input.ButtonSouth {
+		t.Fatalf("controls = %v", controls)
+	}
+	// Connect fires before the harness registers its callbacks, so check it
+	// through the stored events instead.
+	if evs := h.core.latestEvents(); len(evs) != 1 || evs[input.ButtonSouth].Event != input.Connect {
+		t.Fatalf("latest events after start = %+v", evs)
+	}
+	ev := h.current()
+	ev.key(keyB, keyDown)
+	h.expect(input.ButtonPress, input.ButtonSouth)
+	ev.key(keyB, keyUp)
+	h.expect(input.ButtonRelease, input.ButtonSouth)
+	ev.key(keyA, keyDown) // slot 1 has no switch; nothing is mapped to it
+	h.none()
+
+	list := h.core.listPedals()
+	if list["model"] != "pcsensor-1-pedal" {
+		t.Fatalf("model = %v", list["model"])
+	}
+	pedals := list["pedals"].([]interface{})
+	if len(pedals) != 1 {
+		t.Fatalf("pedals = %v", pedals)
+	}
+	p := pedals[0].(map[string]interface{})
+	if p["name"] != "pedal" || p["slot"] != 2 || p["control"] != "ButtonSouth" || p["keycode"] != "KEY_B" || p["keycode_source"] != "device" {
+		t.Fatalf("list_pedals pedal = %v", p)
+	}
+	if h.slots.writes != 0 {
+		t.Fatalf("wrote %d times with nothing to program", h.slots.writes)
+	}
+}
+
+func TestOnePedalProgramsOnlyItsSlot(t *testing.T) {
+	h, err := newOnePedalHarness(t, &OnePedalConfig{Pedal: &PedalConfig{Keycode: "KEY_F14"}}, factorySlots, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [3]slotSetting{keySetting(0x04), keySetting(f14.hid), keySetting(0x06)}
+	if h.slots.writes != 1 || h.slots.slots != want {
+		t.Fatalf("writes=%d slots=%v, want %v", h.slots.writes, h.slots.slots, want)
+	}
+	ev := h.current()
+	ev.key(f14.code, keyDown)
+	h.expect(input.ButtonPress, input.ButtonSouth)
+	ev.key(keyB, keyDown)
+	h.none()
+}
+
+func TestOnePedalSlotOverride(t *testing.T) {
+	three := 3
+	h, err := newOnePedalHarness(t, &OnePedalConfig{Slot: &three}, factorySlots, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := h.current()
+	ev.key(keyC, keyDown)
+	h.expect(input.ButtonPress, input.ButtonSouth)
+	ev.key(keyB, keyDown)
+	h.none()
+	p := h.core.listPedals()["pedals"].([]interface{})[0].(map[string]interface{})
+	if p["slot"] != 3 || p["keycode"] != "KEY_C" {
+		t.Fatalf("list_pedals pedal = %v", p)
+	}
+}
+
+func TestOnePedalSetupErrors(t *testing.T) {
+	mouse := factorySlots
+	mouse[1] = slotSetting{0x08, slotTypeMouse}
+	_, err := newOnePedalHarness(t, &OnePedalConfig{}, mouse, 0)
+	if err == nil || !strings.Contains(err.Error(), "pedal (slot 2) is in mouse mode") {
+		t.Fatalf("mouse mode: got %v", err)
+	}
+	if _, err := newOnePedalHarness(t, &OnePedalConfig{Pedal: &PedalConfig{Keycode: "KEY_F14"}}, mouse, 0); err != nil {
+		t.Fatalf("mouse mode with keycode: %v", err)
+	}
+
+	// Unused slots never block startup.
+	unusedMouse := factorySlots
+	unusedMouse[0] = slotSetting{0x08, slotTypeMouse}
+	if _, err := newOnePedalHarness(t, &OnePedalConfig{}, unusedMouse, 0); err != nil {
+		t.Fatalf("slot 1 in mouse mode: %v", err)
+	}
+}
+
+func TestOnePedalUnplugWhileHeld(t *testing.T) {
+	h, err := newOnePedalHarness(t, &OnePedalConfig{}, factorySlots, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := h.current()
+	first.key(keyB, keyDown)
+	h.expect(input.ButtonPress, input.ButtonSouth)
+	h.mu.Lock()
+	h.avail = false
+	h.mu.Unlock()
+	first.unplug()
+	h.expect(input.ButtonRelease, input.ButtonSouth)
+	h.expect(input.Disconnect, input.ButtonSouth)
 }

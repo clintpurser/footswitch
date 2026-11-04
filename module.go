@@ -33,104 +33,153 @@ type PedalConfig struct {
 	Control string `json:"control,omitempty"`
 }
 
+// DeviceConfig is the attributes every pedal model shares: how to find the
+// device and how to debounce it.
+type DeviceConfig struct {
+	DevicePath string `json:"device_path,omitempty"`
+	USBID      string `json:"usb_id,omitempty"`
+	DebounceMS *int   `json:"debounce_ms,omitempty"`
+}
+
 // Config is the pcsensor-3-pedal attributes.
 type Config struct {
-	Left       *PedalConfig `json:"left,omitempty"`
-	Center     *PedalConfig `json:"center,omitempty"`
-	Right      *PedalConfig `json:"right,omitempty"`
-	DevicePath string       `json:"device_path,omitempty"`
-	USBID      string       `json:"usb_id,omitempty"`
-	DebounceMS *int         `json:"debounce_ms,omitempty"`
+	DeviceConfig
+	Left   *PedalConfig `json:"left,omitempty"`
+	Center *PedalConfig `json:"center,omitempty"`
+	Right  *PedalConfig `json:"right,omitempty"`
 }
 
 const defaultDebounceMS = 25
 
+var usbIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$`)
+
+// validateDevice checks the shared device attributes.
+func (d *DeviceConfig) validateDevice(path string) error {
+	if d.USBID != "" && !usbIDPattern.MatchString(d.USBID) {
+		return fmt.Errorf("%s: usb_id %q must be in vvvv:pppp hex form, e.g. 3553:b001", path, d.USBID)
+	}
+	if d.DebounceMS != nil && *d.DebounceMS <= 0 {
+		return fmt.Errorf("%s: debounce_ms must be a positive integer, got %d", path, *d.DebounceMS)
+	}
+	return nil
+}
+
+// debounce returns the configured debounce window or the default.
+func (d *DeviceConfig) debounce() time.Duration {
+	ms := defaultDebounceMS
+	if d.DebounceMS != nil {
+		ms = *d.DebounceMS
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// openDevice finds and grabs the configured pedal on the host.
+func (d *DeviceConfig) openDevice() (*openedDevice, error) {
+	return openPedal(hostPaths, d.DevicePath, d.USBID)
+}
+
 // convertConfig decodes attributes strictly, so a misspelled attribute is
 // reported instead of silently ignored.
 func convertConfig(attrs utils.AttributeMap) (*Config, error) {
-	raw, err := json.Marshal(attrs)
-	if err != nil {
-		return nil, err
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	var cfg Config
-	if err := dec.Decode(&cfg); err != nil {
+	if err := decodeStrict(attrs, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid attributes (allowed: left, center, right, device_path, usb_id, debounce_ms; "+
 			"pedal blocks allow keycode and control): %w", err)
 	}
 	return &cfg, nil
 }
 
-// pedalLayout is the model's pedal names and default controls, by slot.
-var pedalLayout = []struct {
+func decodeStrict(attrs utils.AttributeMap, into interface{}) error {
+	raw, err := json.Marshal(attrs)
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return dec.Decode(into)
+}
+
+// pedalLayoutEntry is one pedal of a model: its config block name, the
+// label used in logs and errors, the firmware slot it reads and programs,
+// and its default control.
+type pedalLayoutEntry struct {
 	name    string
+	label   string
+	slot    int
 	control input.Control
-}{
-	{"left", input.ButtonLT},
-	{"center", input.ButtonSelect},
-	{"right", input.ButtonRT},
+}
+
+// threePedalLayout is the pcsensor-3-pedal model's pedals, in slot order.
+var threePedalLayout = []pedalLayoutEntry{
+	{"left", "pedal left", 1, input.ButtonLT},
+	{"center", "pedal center", 2, input.ButtonSelect},
+	{"right", "pedal right", 3, input.ButtonRT},
 }
 
 func (cfg *Config) pedalBlocks() []*PedalConfig {
 	return []*PedalConfig{cfg.Left, cfg.Center, cfg.Right}
 }
 
-var usbIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$`)
-
 // Validate checks the config. The input controller has no dependencies.
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
-	_, err := cfg.pedalSpecs(path)
-	if err != nil {
+	if _, err := cfg.pedalSpecs(path); err != nil {
 		return nil, nil, err
 	}
-	if cfg.USBID != "" && !usbIDPattern.MatchString(cfg.USBID) {
-		return nil, nil, fmt.Errorf("%s: usb_id %q must be in vvvv:pppp hex form, e.g. 3553:b001", path, cfg.USBID)
-	}
-	if cfg.DebounceMS != nil && *cfg.DebounceMS <= 0 {
-		return nil, nil, fmt.Errorf("%s: debounce_ms must be a positive integer, got %d", path, *cfg.DebounceMS)
+	if err := cfg.validateDevice(path); err != nil {
+		return nil, nil, err
 	}
 	return nil, nil, nil
 }
 
 // pedalSpecs resolves the pedal blocks against the model's defaults.
 func (cfg *Config) pedalSpecs(path string) ([]pedalSpec, error) {
+	return resolveSpecs(path, threePedalLayout, cfg.pedalBlocks())
+}
+
+// resolveSpecs walks a model's layout and applies the matching pedal
+// blocks (blocks[i] goes with layout[i]; nil means all defaults).
+func resolveSpecs(path string, layout []pedalLayoutEntry, blocks []*PedalConfig) ([]pedalSpec, error) {
 	var specs []pedalSpec
 	controls := map[input.Control]string{}
 	keys := map[string]string{}
-	for i, block := range cfg.pedalBlocks() {
-		layout := pedalLayout[i]
-		s := pedalSpec{name: layout.name, slot: i + 1, control: layout.control}
+	for i, entry := range layout {
+		var block *PedalConfig
+		if i < len(blocks) {
+			block = blocks[i]
+		}
+		s := pedalSpec{name: entry.name, label: entry.label, slot: entry.slot, control: entry.control}
 		if block != nil {
 			if block.Keycode != "" {
 				k, err := lookupKeycode(block.Keycode)
 				if err != nil {
-					return nil, fmt.Errorf("%s: %s.keycode: %w", path, layout.name, err)
+					return nil, fmt.Errorf("%s: %s.keycode: %w", path, entry.name, err)
 				}
 				if other, ok := keys[k.name]; ok {
-					return nil, fmt.Errorf("%s: %s.keycode and %s.keycode are both %s", path, other, layout.name, k.name)
+					return nil, fmt.Errorf("%s: %s.keycode and %s.keycode are both %s", path, other, entry.name, k.name)
 				}
-				keys[k.name] = layout.name
+				keys[k.name] = entry.name
 				s.keycode = &k
 			}
 			if block.Control != "" {
 				if !isButtonControl(block.Control) {
 					return nil, fmt.Errorf("%s: %s.control %q is not a Viam button control (one of %s)",
-						path, layout.name, block.Control, strings.Join(controlNames(buttonControls), ", "))
+						path, entry.name, block.Control, strings.Join(controlNames(buttonControls), ", "))
 				}
 				s.control = input.Control(block.Control)
 			}
 		}
 		if other, ok := controls[s.control]; ok {
-			return nil, fmt.Errorf("%s: pedals %s and %s both use control %s", path, other, layout.name, s.control)
+			return nil, fmt.Errorf("%s: pedals %s and %s both use control %s", path, other, entry.name, s.control)
 		}
-		controls[s.control] = layout.name
+		controls[s.control] = entry.name
 		specs = append(specs, s)
 	}
 	return specs, nil
 }
 
-type footswitchPcsensor3Pedal struct {
+// pedalController is the input controller resource both pedal models return.
+// It carries no model-specific state; the core holds the model name and pedals.
+type pedalController struct {
 	resource.AlwaysRebuild
 
 	name   resource.Name
@@ -152,40 +201,38 @@ func NewPcsensor3Pedal(ctx context.Context, deps resource.Dependencies, name res
 	if err != nil {
 		return nil, err
 	}
-	debounce := defaultDebounceMS
-	if conf.DebounceMS != nil {
-		debounce = *conf.DebounceMS
-	}
+	return newPedalController(name, Pcsensor3Pedal, specs, &conf.DeviceConfig, logger)
+}
+
+func newPedalController(name resource.Name, model resource.Model, specs []pedalSpec, dev *DeviceConfig, logger logging.Logger) (input.Controller, error) {
 	core, err := newControllerCore(coreOptions{
-		model:    Pcsensor3Pedal.Name,
+		model:    model.Name,
 		pedals:   specs,
-		debounce: time.Duration(debounce) * time.Millisecond,
-		open: func() (*openedDevice, error) {
-			return openPedal(hostPaths, conf.DevicePath, conf.USBID)
-		},
+		debounce: dev.debounce(),
+		open:     dev.openDevice,
 	}, logger)
 	if err != nil {
 		return nil, err
 	}
-	return &footswitchPcsensor3Pedal{name: name, logger: logger, core: core}, nil
+	return &pedalController{name: name, logger: logger, core: core}, nil
 }
 
-func (s *footswitchPcsensor3Pedal) Name() resource.Name {
+func (s *pedalController) Name() resource.Name {
 	return s.name
 }
 
 // Controls returns one control per pedal.
-func (s *footswitchPcsensor3Pedal) Controls(ctx context.Context, extra map[string]interface{}) ([]input.Control, error) {
+func (s *pedalController) Controls(ctx context.Context, extra map[string]interface{}) ([]input.Control, error) {
 	return s.core.controls(), nil
 }
 
 // Events returns the latest event for each pedal.
-func (s *footswitchPcsensor3Pedal) Events(ctx context.Context, extra map[string]interface{}) (map[input.Control]input.Event, error) {
+func (s *pedalController) Events(ctx context.Context, extra map[string]interface{}) (map[input.Control]input.Event, error) {
 	return s.core.latestEvents(), nil
 }
 
 // RegisterControlCallback calls back on ButtonPress, ButtonRelease, Connect and Disconnect.
-func (s *footswitchPcsensor3Pedal) RegisterControlCallback(
+func (s *pedalController) RegisterControlCallback(
 	ctx context.Context,
 	control input.Control,
 	triggers []input.EventType,
@@ -197,7 +244,7 @@ func (s *footswitchPcsensor3Pedal) RegisterControlCallback(
 
 var pedalCommands = []string{"list_pedals"}
 
-func (s *footswitchPcsensor3Pedal) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (s *pedalController) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	switch cmd["command"] {
 	case "list_pedals":
 		return s.core.listPedals(), nil
@@ -207,11 +254,11 @@ func (s *footswitchPcsensor3Pedal) DoCommand(ctx context.Context, cmd map[string
 	}
 }
 
-func (s *footswitchPcsensor3Pedal) Status(ctx context.Context) (map[string]interface{}, error) {
+func (s *pedalController) Status(ctx context.Context) (map[string]interface{}, error) {
 	return s.core.listPedals(), nil
 }
 
-func (s *footswitchPcsensor3Pedal) Close(context.Context) error {
+func (s *pedalController) Close(context.Context) error {
 	s.core.close()
 	return nil
 }

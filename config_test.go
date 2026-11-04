@@ -3,7 +3,9 @@ package footswitch
 import (
 	"strings"
 	"testing"
+	"time"
 
+	input "go.viam.com/rdk/components/input"
 	"go.viam.com/rdk/utils"
 )
 
@@ -38,9 +40,9 @@ func TestValidate(t *testing.T) {
 		{Config{Left: &PedalConfig{Control: "Jump"}}, "left.control"},
 		{Config{Left: &PedalConfig{Control: "ButtonRT"}}, "both use control ButtonRT"},
 		{Config{Left: &PedalConfig{Keycode: "KEY_F13"}, Center: &PedalConfig{Keycode: "KEY_F13"}}, "both KEY_F13"},
-		{Config{USBID: "3553-b001"}, "usb_id"},
-		{Config{USBID: "3553:B001"}, ""},
-		{Config{DebounceMS: &n}, "debounce_ms"},
+		{Config{DeviceConfig: DeviceConfig{USBID: "3553-b001"}}, "usb_id"},
+		{Config{DeviceConfig: DeviceConfig{USBID: "3553:B001"}}, ""},
+		{Config{DeviceConfig: DeviceConfig{DebounceMS: &n}}, "debounce_ms"},
 	}
 	for _, c := range cases {
 		deps, _, err := c.cfg.Validate("components.0")
@@ -94,5 +96,105 @@ func TestValidateActions(t *testing.T) {
 	}
 	if strings.Join(deps, ",") != "pedals,arm,gripper" {
 		t.Fatalf("deps = %v", deps)
+	}
+}
+
+func TestConvertOnePedalConfigRejectsUnknownKeys(t *testing.T) {
+	cfg, err := convertOnePedalConfig(utils.AttributeMap{"pedal": map[string]interface{}{"keycode": "KEY_F14"}, "slot": 2, "debounce_ms": 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Pedal == nil || cfg.Pedal.Keycode != "KEY_F14" || cfg.Slot == nil || *cfg.Slot != 2 || cfg.DebounceMS == nil || *cfg.DebounceMS != 20 {
+		t.Fatalf("decoded %+v", cfg)
+	}
+	if _, err := convertOnePedalConfig(nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, attrs := range []utils.AttributeMap{
+		{"left": map[string]interface{}{}},
+		{"pedal": map[string]interface{}{"key": "x"}},
+		{"slot": "two"},
+	} {
+		if _, err := convertOnePedalConfig(attrs); err == nil {
+			t.Errorf("%v: expected an error", attrs)
+		}
+	}
+}
+
+func TestValidateOnePedal(t *testing.T) {
+	zero, one, three, four := 0, 1, 3, 4
+	cases := []struct {
+		cfg  OnePedalConfig
+		want string
+	}{
+		{OnePedalConfig{}, ""},
+		{OnePedalConfig{Slot: &one}, ""},
+		{OnePedalConfig{Slot: &three}, ""},
+		{OnePedalConfig{Pedal: &PedalConfig{Keycode: "KEY_F14", Control: "ButtonEStop"}}, ""},
+		{OnePedalConfig{Slot: &zero}, "slot"},
+		{OnePedalConfig{Slot: &four}, "slot"},
+		{OnePedalConfig{Pedal: &PedalConfig{Keycode: "KEY_NOPE"}}, "pedal.keycode"},
+		{OnePedalConfig{Pedal: &PedalConfig{Keycode: "KEY_LEFTCTRL"}}, "modifier"},
+		{OnePedalConfig{Pedal: &PedalConfig{Control: "Jump"}}, "pedal.control"},
+		{OnePedalConfig{DeviceConfig: DeviceConfig{USBID: "3553-b001"}}, "usb_id"},
+		{OnePedalConfig{DeviceConfig: DeviceConfig{DebounceMS: &zero}}, "debounce_ms"},
+	}
+	for _, c := range cases {
+		deps, _, err := c.cfg.Validate("components.0")
+		if len(deps) != 0 {
+			t.Errorf("unexpected deps %v", deps)
+		}
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%+v: %v", c.cfg, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%+v: got %v, want error containing %q", c.cfg, err, c.want)
+		}
+	}
+}
+
+func TestLayouts(t *testing.T) {
+	specs, err := (&Config{}).pedalSpecs("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pedalSpec{
+		{name: "left", label: "pedal left", slot: 1, control: input.ButtonLT},
+		{name: "center", label: "pedal center", slot: 2, control: input.ButtonSelect},
+		{name: "right", label: "pedal right", slot: 3, control: input.ButtonRT},
+	}
+	if len(specs) != 3 {
+		t.Fatalf("3-pedal specs = %+v", specs)
+	}
+	for i := range want {
+		if specs[i] != want[i] {
+			t.Errorf("3-pedal spec %d = %+v, want %+v", i, specs[i], want[i])
+		}
+	}
+
+	specs, err = (&OnePedalConfig{}).pedalSpecs("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0] != (pedalSpec{name: "pedal", label: "pedal", slot: 2, control: input.ButtonSouth}) {
+		t.Fatalf("1-pedal specs = %+v", specs)
+	}
+	three := 3
+	specs, err = (&OnePedalConfig{Slot: &three}).pedalSpecs("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(specs) != 1 || specs[0].slot != 3 {
+		t.Fatalf("1-pedal slot 3 specs = %+v", specs)
+	}
+}
+
+func TestDebounceDefault(t *testing.T) {
+	if d := (&DeviceConfig{}).debounce(); d != 25*time.Millisecond {
+		t.Fatalf("default debounce = %s", d)
+	}
+	ten := 10
+	if d := (&DeviceConfig{DebounceMS: &ten}).debounce(); d != 10*time.Millisecond {
+		t.Fatalf("debounce = %s", d)
 	}
 }
