@@ -26,7 +26,7 @@
     {
       "api": "rdk:service:discovery",
       "model": "clint:footswitch:discovery",
-      "short_description": "Finds attached iKKEGOL / PCsensor USB foot pedals and suggests pcsensor-3-pedal and pcsensor-1-pedal configs",
+      "short_description": "Finds attached iKKEGOL / PCsensor USB foot pedals and suggests 3-pedal and 1-pedal component configs",
       "markdown_link": "clint_footswitch_discovery.md"
     }
   ],
