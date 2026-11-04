@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.viam.com/rdk/resource"
 )
 
 // fakeTree builds a sysfs and /dev tree for one iKKEGOL pedal on port 6:
@@ -73,14 +75,45 @@ func TestScanFindsKeyboardInterface(t *testing.T) {
 		t.Fatalf("by device_path: %+v, %v", got, err)
 	}
 
+	// One pedal: both models are suggested as "footswitch" with no
+	// device_path, so the config is {} and survives a USB port change.
 	cfgs := suggestConfigs(devs)
-	if len(cfgs) != 2 {
-		t.Fatalf("suggested %d configs: %+v", len(cfgs), cfgs)
+	if len(cfgs) != 2 || cfgs[0].Model != Pcsensor3Pedal || cfgs[1].Model != Pcsensor1Pedal {
+		t.Fatalf("suggested %+v", cfgs)
 	}
-	if cfgs[0].Name != "footswitch-3553-b001-6" || cfgs[0].Attributes["device_path"] != d.byPath || cfgs[0].Model != Pcsensor3Pedal {
-		t.Fatalf("suggested %+v", cfgs[0])
+	for _, c := range cfgs {
+		if c.Name != "footswitch" || len(c.Attributes) != 0 {
+			t.Fatalf("suggested %+v", c)
+		}
 	}
-	if cfgs[1].Name != "footswitch-1-pedal-3553-b001-6" || cfgs[1].Attributes["device_path"] != d.byPath || cfgs[1].Model != Pcsensor1Pedal {
-		t.Fatalf("suggested %+v", cfgs[1])
+
+}
+
+func TestSuggestConfigsSeveralPedals(t *testing.T) {
+	devs := []inputDevice{
+		{usbID: "3553:b001", eventPath: "/dev/input/event5", byPath: "/dev/input/by-path/a-event-kbd"},
+		{usbID: "3553:b001", eventPath: "/dev/input/event9", byPath: "/dev/input/by-path/b-event-kbd"},
+		{usbID: "3553:b001", eventPath: "/dev/input/event12"},
+	}
+	cfgs := suggestConfigs(devs)
+	want := []struct {
+		name, path string
+		model      resource.Model
+	}{
+		{"footswitch", "/dev/input/by-path/a-event-kbd", Pcsensor3Pedal},
+		{"footswitch", "/dev/input/by-path/a-event-kbd", Pcsensor1Pedal},
+		{"footswitch-1", "/dev/input/by-path/b-event-kbd", Pcsensor3Pedal},
+		{"footswitch-1", "/dev/input/by-path/b-event-kbd", Pcsensor1Pedal},
+		{"footswitch-2", "/dev/input/event12", Pcsensor3Pedal},
+		{"footswitch-2", "/dev/input/event12", Pcsensor1Pedal},
+	}
+	if len(cfgs) != len(want) {
+		t.Fatalf("suggested %d configs, want %d", len(cfgs), len(want))
+	}
+	for i, w := range want {
+		c := cfgs[i]
+		if c.Name != w.name || c.Model != w.model || c.Attributes["device_path"] != w.path {
+			t.Errorf("config %d = %s %s %v, want %s %s %s", i, c.Name, c.Model, c.Attributes, w.name, w.model, w.path)
+		}
 	}
 }

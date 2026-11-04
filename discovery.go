@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	input "go.viam.com/rdk/components/input"
 	"go.viam.com/rdk/logging"
@@ -47,27 +46,27 @@ func (d *footswitchDiscovery) DiscoverResources(ctx context.Context, extra map[s
 	return suggestConfigs(devs), nil
 }
 
-// suggestConfigs emits two configs per device, 3-pedal first: the device
-// cannot tell the module its pedal count, so the user picks the one that
-// matches their hardware. Adding both for one device makes the second fail
-// to grab the pedal.
+// suggestConfigs emits two configs per device, 3-pedal first; the user adds
+// the one that matches their hardware. Both are named "footswitch" for the
+// first device and "footswitch-1", "footswitch-2" and so on for the others,
+// the same scheme the app uses when it renames a duplicate.
+//
+// device_path is set only when several pedals are plugged in. With one pedal
+// the component finds it by USB ID, so the config stays {} and keeps working
+// if the pedal moves to another USB port.
 func suggestConfigs(devs []inputDevice) []resource.Config {
 	out := make([]resource.Config, 0, 2*len(devs))
-	for _, dev := range devs {
-		id := strings.ReplaceAll(dev.usbID, ":", "-")
-		for _, m := range []struct {
-			prefix string
-			model  resource.Model
-		}{
-			{"footswitch", Pcsensor3Pedal},
-			{"footswitch-1-pedal", Pcsensor1Pedal},
-		} {
-			out = append(out, resource.Config{
-				Name:       fmt.Sprintf("%s-%s-%s", m.prefix, id, dev.port),
-				API:        input.API,
-				Model:      m.model,
-				Attributes: utils.AttributeMap{"device_path": dev.stablePath()},
-			})
+	for i, dev := range devs {
+		name := "footswitch"
+		if i > 0 {
+			name = fmt.Sprintf("footswitch-%d", i)
+		}
+		for _, model := range []resource.Model{Pcsensor3Pedal, Pcsensor1Pedal} {
+			attrs := utils.AttributeMap{}
+			if len(devs) > 1 {
+				attrs["device_path"] = dev.stablePath()
+			}
+			out = append(out, resource.Config{Name: name, API: input.API, Model: model, Attributes: attrs})
 		}
 	}
 	return out

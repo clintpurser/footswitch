@@ -70,6 +70,8 @@ func TestValidateActions(t *testing.T) {
 		{ActionsConfig{}, "input_controller"},
 		{ActionsConfig{InputController: "pedals"}, ""},
 		{ActionsConfig{InputController: "pedals", Controls: map[string]ControlActions{"Foo": {}}}, "controls.Foo"},
+		{ActionsConfig{InputController: "pedals", Controls: map[string]ControlActions{"ButtonLt": {}}}, "not a pedal name"},
+		{ActionsConfig{InputController: "pedals", Controls: map[string]ControlActions{"pedal": {}, "left": {}}}, ""},
 		{ActionsConfig{InputController: "pedals", Controls: press(Action{Method: "do_command"})}, "component"},
 		{ActionsConfig{InputController: "pedals", Controls: press(Action{Component: "arm"})}, "method"},
 		{ActionsConfig{InputController: "pedals", Controls: press(Action{Component: "arm", Method: "stop"})}, "only do_command"},

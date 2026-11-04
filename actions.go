@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +39,9 @@ type ControlActions struct {
 	OnRelease *Action `json:"on_release,omitempty"`
 }
 
-// ActionsConfig is the actions service's attributes.
+// ActionsConfig is the actions service's attributes. Keys of Controls are
+// pedal names (as the pedal models' list_pedals reports them, e.g. "pedal"
+// or "left") or Viam control names (e.g. "ButtonLT").
 type ActionsConfig struct {
 	InputController string                    `json:"input_controller"`
 	Controls        map[string]ControlActions `json:"controls,omitempty"`
@@ -61,8 +65,9 @@ func (cfg *ActionsConfig) Validate(path string) ([]string, []string, error) {
 	deps := []string{cfg.InputController}
 	seen := map[string]bool{cfg.InputController: true}
 	for _, control := range sortedKeys(cfg.Controls) {
-		if !isControl(control) {
-			return nil, nil, fmt.Errorf("%s: controls.%s is not a Viam control name (for example ButtonLT)", path, control)
+		if !isControl(control) && !pedalNamePattern.MatchString(control) {
+			return nil, nil, fmt.Errorf("%s: controls.%s is not a pedal name (for example pedal or left) "+
+				"or a Viam control name (for example ButtonSouth)", path, control)
 		}
 		ca := cfg.Controls[control]
 		for _, a := range []struct {
@@ -96,6 +101,10 @@ func (cfg *ActionsConfig) Validate(path string) ([]string, []string, error) {
 	return deps, nil, nil
 }
 
+// pedalNamePattern matches pedal names. Viam control names start with an
+// upper-case letter, so the two never overlap.
+var pedalNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
 func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -113,9 +122,9 @@ type boundAction struct {
 }
 
 type queuedAction struct {
-	control input.Control
-	event   input.EventType
-	action  *boundAction
+	label  string
+	event  input.EventType
+	action *boundAction
 }
 
 type footswitchActions struct {
@@ -136,6 +145,7 @@ type footswitchActions struct {
 }
 
 type controlWorker struct {
+	label     string // the key in the config: a pedal name or a control name
 	control   input.Control
 	onPress   *boundAction
 	onRelease *boundAction
@@ -201,9 +211,14 @@ func NewActions(ctx context.Context, deps resource.Dependencies, name resource.N
 		cancelFunc: cancelFunc,
 		connected:  true,
 	}
+	resolved, err := resolveControls(ctx, controller, conf.InputController, sortedKeys(conf.Controls))
+	if err != nil {
+		cancelFunc()
+		return nil, err
+	}
 	for _, control := range sortedKeys(conf.Controls) {
 		ca := conf.Controls[control]
-		w := &controlWorker{control: input.Control(control), queue: make(chan queuedAction, actionQueueSize)}
+		w := &controlWorker{label: control, control: resolved[control], queue: make(chan queuedAction, actionQueueSize)}
 		if w.onPress, err = bind(deps, ca.OnPress); err != nil {
 			cancelFunc()
 			return nil, fmt.Errorf("controls.%s.on_press: %w", control, err)
@@ -222,10 +237,10 @@ func NewActions(ctx context.Context, deps resource.Dependencies, name resource.N
 		for _, c := range available {
 			have[c] = true
 		}
-		for c := range s.controls {
+		for c, w := range s.controls {
 			if !have[c] {
-				logger.Warnf("%s doesn't report control %s (it has %v); its actions won't run until it does",
-					conf.InputController, c, available)
+				logger.Warnf("%s doesn't report control %s (it has %v); actions for %s won't run until it does",
+					conf.InputController, c, available, w.label)
 			}
 		}
 	}
@@ -275,9 +290,9 @@ func (s *footswitchActions) onEvent(ctx context.Context, ev input.Event) {
 		return
 	}
 	select {
-	case w.queue <- queuedAction{control: w.control, event: ev.Event, action: a}:
+	case w.queue <- queuedAction{label: w.label, event: ev.Event, action: a}:
 	default:
-		s.logger.Errorf("%s %s: dropped %s.%s; %d actions already queued", w.control, ev.Event, a.Component, a.Method, actionQueueSize)
+		s.logger.Errorf("%s %s: dropped %s.%s; %d actions already queued", w.label, ev.Event, a.Component, a.Method, actionQueueSize)
 	}
 }
 
@@ -302,11 +317,11 @@ func (s *footswitchActions) run(q queuedAction) {
 	took := time.Since(start).Round(time.Millisecond)
 	switch {
 	case err == nil:
-		s.logger.Infof("%s %s: %s.%s ok in %s", q.control, q.event, q.action.Component, q.action.Method, took)
+		s.logger.Infof("%s %s: %s.%s ok in %s", q.label, q.event, q.action.Component, q.action.Method, took)
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		s.logger.Errorf("%s %s: %s.%s timed out after %s and was cancelled", q.control, q.event, q.action.Component, q.action.Method, s.timeout)
+		s.logger.Errorf("%s %s: %s.%s timed out after %s and was cancelled", q.label, q.event, q.action.Component, q.action.Method, s.timeout)
 	default:
-		s.logger.Errorf("%s %s: %s.%s failed after %s: %v", q.control, q.event, q.action.Component, q.action.Method, took, err)
+		s.logger.Errorf("%s %s: %s.%s failed after %s: %v", q.label, q.event, q.action.Component, q.action.Method, took, err)
 	}
 }
 
@@ -322,8 +337,8 @@ func (s *footswitchActions) Status(ctx context.Context) (map[string]interface{},
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	queued := map[string]interface{}{}
-	for c, w := range s.controls {
-		queued[string(c)] = len(w.queue)
+	for _, w := range s.controls {
+		queued[w.label] = len(w.queue)
 	}
 	return map[string]interface{}{"controller_connected": s.connected, "queued": queued}, nil
 }
@@ -336,4 +351,70 @@ func (s *footswitchActions) Close(ctx context.Context) error {
 	s.cancelFunc()
 	s.wg.Wait()
 	return nil
+}
+
+// resolveControls maps each config key to the control it listens to. A key
+// that is a Viam control name is used as is. Any other key is a pedal name,
+// looked up through the controller's list_pedals command, so users write the
+// same names they use in the pedal's own config and never need to know the
+// control a pedal reports as.
+func resolveControls(ctx context.Context, controller input.Controller, controllerName string, keys []string) (map[string]input.Control, error) {
+	out := make(map[string]input.Control, len(keys))
+	var pedals map[string]input.Control
+	var listErr error
+	listed := false
+	for _, key := range keys {
+		if isControl(key) {
+			out[key] = input.Control(key)
+			continue
+		}
+		if !listed {
+			listed = true
+			pedals, listErr = listPedalControls(ctx, controller)
+		}
+		if listErr != nil {
+			return nil, fmt.Errorf("controls.%s: %s doesn't list pedal names (%v); use a Viam control name such as ButtonSouth",
+				key, controllerName, listErr)
+		}
+		c, ok := pedals[key]
+		if !ok {
+			return nil, fmt.Errorf("controls.%s: %s has no pedal named %q (it has %s)",
+				key, controllerName, key, strings.Join(sortedKeys(pedals), ", "))
+		}
+		out[key] = c
+	}
+	byControl := map[input.Control]string{}
+	for _, key := range keys {
+		if other, ok := byControl[out[key]]; ok {
+			return nil, fmt.Errorf("controls.%s and controls.%s both refer to control %s; merge them", other, key, out[key])
+		}
+		byControl[out[key]] = key
+	}
+	return out, nil
+}
+
+// listPedalControls asks a pedal controller for its pedal names and the
+// control each reports as.
+func listPedalControls(ctx context.Context, controller input.Controller) (map[string]input.Control, error) {
+	resp, err := controller.DoCommand(ctx, map[string]interface{}{"command": "list_pedals"})
+	if err != nil {
+		return nil, err
+	}
+	list, ok := resp["pedals"].([]interface{})
+	if !ok {
+		return nil, errors.New("its list_pedals response has no pedals list")
+	}
+	out := map[string]input.Control{}
+	for _, item := range list {
+		p, _ := item.(map[string]interface{})
+		name, _ := p["name"].(string)
+		control, _ := p["control"].(string)
+		if name != "" && control != "" {
+			out[name] = input.Control(control)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("its list_pedals response names no pedals")
+	}
+	return out, nil
 }

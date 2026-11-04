@@ -2,6 +2,8 @@ package footswitch
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,10 +21,13 @@ type fakeController struct {
 
 	mu        sync.Mutex
 	callbacks map[input.Control]map[input.EventType]input.ControlFunction
+	// pedals, when set, is what list_pedals returns, in the shape the pedal
+	// models produce. When nil the controller has no DoCommands, like a gamepad.
+	pedals []interface{}
 }
 
 func (f *fakeController) Controls(context.Context, map[string]interface{}) ([]input.Control, error) {
-	return []input.Control{input.ButtonLT, input.ButtonSelect, input.ButtonRT}, nil
+	return []input.Control{input.ButtonLT, input.ButtonSelect, input.ButtonRT, input.ButtonSouth}, nil
 }
 
 func (f *fakeController) Events(context.Context, map[string]interface{}) (map[input.Control]input.Event, error) {
@@ -45,8 +50,20 @@ func (f *fakeController) RegisterControlCallback(_ context.Context, c input.Cont
 	return nil
 }
 
-func (f *fakeController) DoCommand(context.Context, map[string]interface{}) (map[string]interface{}, error) {
-	return nil, nil
+func (f *fakeController) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	if f.pedals == nil || cmd["command"] != "list_pedals" {
+		return nil, errors.New("unknown command")
+	}
+	return map[string]interface{}{"model": "pcsensor-1-pedal", "pedals": f.pedals}, nil
+}
+
+func pedalEntry(name string, control input.Control) interface{} {
+	return map[string]interface{}{"name": name, "slot": 2, "control": string(control), "keycode": "KEY_B"}
+}
+
+func newFakeController(pedals ...interface{}) *fakeController {
+	return &fakeController{Named: input.Named("footswitch").AsNamed(),
+		callbacks: map[input.Control]map[input.EventType]input.ControlFunction{}, pedals: pedals}
 }
 
 func (f *fakeController) Status(context.Context) (map[string]interface{}, error) { return nil, nil }
@@ -152,5 +169,83 @@ func TestActionsTimeoutAndDrop(t *testing.T) {
 	}
 	if len(arm.calls) != 0 {
 		t.Fatal("timed-out actions should not complete")
+	}
+}
+
+func TestActionsByPedalName(t *testing.T) {
+	ctrl := newFakeController(pedalEntry("pedal", input.ButtonSouth))
+	teleop := &recorder{Named: resource.NewName(resource.APINamespaceRDK.WithServiceType("generic"), "teleop-lf").AsNamed(),
+		calls: make(chan map[string]interface{}, 8)}
+	deps := resource.Dependencies{ctrl.Name(): ctrl, teleop.Name(): teleop}
+	cfg := &ActionsConfig{
+		InputController: "footswitch",
+		Controls: map[string]ControlActions{
+			"pedal": {
+				OnPress:   &Action{Component: "teleop-lf", Method: "do_command", Args: map[string]interface{}{"command": "start"}},
+				OnRelease: &Action{Component: "teleop-lf", Method: "do_command", Args: map[string]interface{}{"command": "stop"}},
+			},
+		},
+	}
+	if _, _, err := cfg.Validate("services.0"); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewActions(context.Background(), deps, resource.NewName(resource.APINamespaceRDK.WithServiceType("generic"), "a"), cfg, logging.NewTestLogger(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close(context.Background())
+
+	// The pedal named "pedal" reports as ButtonSouth.
+	ctrl.trigger(input.ButtonSouth, input.ButtonPress)
+	ctrl.trigger(input.ButtonSouth, input.ButtonRelease)
+	for _, want := range []string{"start", "stop"} {
+		select {
+		case got := <-teleop.calls:
+			if got["command"] != want {
+				t.Fatalf("got %v, want %s", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %s", want)
+		}
+	}
+	st, err := svc.(*footswitchActions).Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st["queued"].(map[string]interface{})["pedal"]; !ok {
+		t.Fatalf("status should key queues by the configured name: %v", st)
+	}
+}
+
+func TestResolveControls(t *testing.T) {
+	ctx := context.Background()
+	three := newFakeController(pedalEntry("left", input.ButtonLT), pedalEntry("center", input.ButtonSelect), pedalEntry("right", input.ButtonRT))
+
+	got, err := resolveControls(ctx, three, "pedals", []string{"ButtonSouth", "center", "left"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["left"] != input.ButtonLT || got["center"] != input.ButtonSelect || got["ButtonSouth"] != input.ButtonSouth {
+		t.Fatalf("resolved %v", got)
+	}
+
+	// Control names alone never call list_pedals, so gamepads keep working.
+	if _, err := resolveControls(ctx, newFakeController(), "gamepad", []string{"ButtonLT"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		ctrl *fakeController
+		keys []string
+		want string
+	}{
+		{three, []string{"pedal"}, `has no pedal named "pedal" (it has center, left, right)`},
+		{newFakeController(), []string{"pedal"}, "doesn't list pedal names"},
+		{three, []string{"ButtonLT", "left"}, "both refer to control ButtonLT"},
+	} {
+		_, err := resolveControls(ctx, c.ctrl, "pedals", c.keys)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: got %v, want error containing %q", c.keys, err, c.want)
+		}
 	}
 }
